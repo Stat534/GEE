@@ -1,0 +1,180 @@
+---
+title: "Google Earth Engine guide: Part 1"
+format: gfm
+editor: visual
+---
+
+#### Motivation
+
+- Spatial data analyses require high quality spatial covariates.
+
+- Textbook problems may include necessary covariates, but most "real-world" scenarios do not.
+
+- No many spatial data warehouses are free and easily interface with R
+
+
+#### Google Earth Engine
+
+- Google Earth Engine - not to be confused with Google Earth, contains a huge amount of [spatial data](https://developers.google.com/earth-engine/datasets) - most of which is from satellite imagery.
+
+- In addition to landuse datasets, Google Earth Engine also has data like:
+  - [Night-time Lights](https://developers.google.com/earth-engine/datasets/catalog/BNU_FGS_CCNL_v1)
+  - [Human Population](https://developers.google.com/earth-engine/datasets/catalog/CIESIN_GPWv411_GPW_Data_Context)
+  - [Weather Data](https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_GRIDMET)
+  - and many more
+  
+### Setting up Google Earth Engine
+
+
+
+
+#### 1. Register for GEE
+
+- Visit <https://developers.google.com/earth-engine> and register your account. Note that google earth engine is free for [non-profit use](https://earthengine.google.com/noncommercial/). 
+- Click the unpaid usage box when connecting your gmail account. 
+- Create a new cloud project - I've named mine STAT 534.
+- Lastly, accept terms of usage.
+
+This will give the the opportunity to open the earth engine code editor.
+
+#### 2. Earth Engine Code Editor
+
+Earth engine has a built in Java-Script code editor. In addition to the javascript code editor, earth engine also allows supports a python API. Fortunately for R users, there is an R package that takes advantage of this. For now the focus will be on using the code editor directly.
+
+- explore the Scripts tab and run a few examples. Here is the `normalized difference` script. You can run these scripts and see the map change:
+
+```
+// NormalizedDifference example.
+//
+// Compute Normalized Difference Vegetation Index over MOD09GA product.
+// NDVI = (NIR - RED) / (NIR + RED), where
+// RED is sur_refl_b01, 620-670nm
+// NIR is sur_refl_b02, 841-876nm
+
+// Load a MODIS image.
+var img = ee.Image('MODIS/006/MOD09GA/2012_03_09');
+
+// Use the normalizedDifference(A, B) to compute (A - B) / (A + B)
+var ndvi = img.normalizedDifference(['sur_refl_b02', 'sur_refl_b01']);
+
+// Make a palette: a list of hex strings.
+var palette = ['FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718',
+               '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+               '004C00', '023B01', '012E01', '011D01', '011301'];
+
+// Center the map
+Map.setCenter(-94.84497, 39.01918, 8);
+
+// Display the input image and the NDVI derived from it.
+Map.addLayer(img.select(['sur_refl_b01', 'sur_refl_b04', 'sur_refl_b03']),
+         {gain: [0.1, 0.1, 0.1]}, 'MODIS bands 1/4/3');
+Map.addLayer(ndvi, {min: 0, max: 1, palette: palette}, 'NDVI');
+```
+
+- The examples tab also allows you to view datasets. For example the USGS creates a national land cover data base that we can view.
+
+```
+// Import the NLCD collection.
+var dataset = ee.ImageCollection('USGS/NLCD_RELEASES/2021_REL/NLCD');
+
+// The collection contains images for the 2021 year release and the full suite
+// of products.
+print('Products:', dataset.aggregate_array('system:index'));
+
+// Filter the collection to the 2021 product.
+var nlcd2021 = dataset.filter(ee.Filter.eq('system:index', '2021')).first();
+
+// Each product has multiple bands for describing aspects of land cover.
+print('Bands:', nlcd2021.bandNames());
+
+// Select the land cover band.
+var landcover = nlcd2021.select('landcover');
+
+// Display land cover on the map.
+Map.setCenter(-95, 38, 5);
+Map.addLayer(landcover, null, 'Landcover');
+
+```
+
+- You can download images for use in R or just for viewing. Generally, we will want to do so on a reduced geographic scope. Here is an example...
+
+```
+// Import the NLCD collection.
+var dataset = ee.ImageCollection('USGS/NLCD_RELEASES/2021_REL/NLCD');
+
+// The collection contains images for the 2021 year release and the full suite
+// of products.
+print('Products:', dataset.aggregate_array('system:index'));
+
+// Filter the collection to the 2021 product.
+var nlcd2021 = dataset.filter(ee.Filter.eq('system:index', '2021')).first();
+
+// Each product has multiple bands for describing aspects of land cover.
+print('Bands:', nlcd2021.bandNames());
+
+// Select the land cover band.
+var landcover = nlcd2021.select('landcover');
+
+// Display land cover on the map.
+Map.setCenter(-95, 38, 5);
+Map.addLayer(landcover, null, 'Landcover');
+
+var boz_box = ee.Geometry.Rectangle([-110.6, 45.4, -111.4, 46]);
+
+Map.addLayer(boz_box, null, 'box');
+
+// Retrieve the projection information from a band of the original image.
+// Call getInfo() on the projection to request a client-side object containing
+// the crs and transform information needed for the client-side Export function.
+var projection = landcover.projection().getInfo();
+
+// Export the image, specifying the CRS, transform, and region.
+Export.image.toDrive({
+  image: landcover,
+  description: 'landcover_bozo',
+  crs: projection.crs,
+  crsTransform: projection.transform,
+  region: boz_box
+});
+```
+
+Running the download task in the console will enable you to export images. I'd suggest downloading the file to your Google drive account as a geoTiff file.
+
+When exporting images, you'll likely need to set the coordinate reference system (basically how the projection of spherical data is made into two dimensions) for the download. For this particular image, I'd recommend specify this `EPSG:3857`.
+
+---
+
+### 3. Back to R
+
+Now we will return to R and import our objects using the `terra` package. I've saved my image as `landcover_bozeman.tif`. 
+
+```{r}
+library(terra)
+describe("landcover_bozeman.tif")
+raster_in <- rast("landcover_bozeman.tif")
+raster_in
+plot(raster_in)
+
+summary(as.factor(values(raster_in)))
+```
+
+
+
+[What are we seeing? These colors correspond to different land classes.](https://www.mrlc.gov/data/legends/national-land-cover-database-class-legend-and-description). 
+
+The coded values of each landclass / pixel combination can be pulled from the raster object directly.
+
+```{r}
+library(tidyverse)
+landuse_df <- as.data.frame(raster_in, xy = TRUE)
+
+```
+
+---
+
+__Activity:__ Extract and plot elevation (in R) for the coastal area near Byron Bay, NSW, Australia.
+
+---
+
+Next we will start to think about how this information can inform our point process modeling.
+
