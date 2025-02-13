@@ -1,0 +1,157 @@
+---
+title: "Google Earth Engine guide: Part 2"
+format: pdf
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+- Previously, we extracted raster data from the earth engine code editor.
+
+- Now, we are going to now see how to do this directly in R using the `rgee` package. For additional reference, please see <https://csaybar.github.io/rgee-examples/>.
+
+- Note that this process requires an active version of python on your computer and the installation process can be somewhat involved, especially for windows OS. [RGEE Installation](https://cran.r-project.org/web/packages/rgee/vignettes/rgee01.html)
+
+---
+
+```{r}
+#| include: false
+library(terra)
+library(tidyverse)
+library(rgee)
+library(ggmap)
+library(spatstat)
+
+```
+
+```{r}
+#ee_install() # only need to do once
+#ee_Authenticate() # need to do once a week
+ee_Initialize()
+ee_check()
+```
+
+
+As an example, consider digital elevation from the [HydroSHEDS data](https://developers.google.com/earth-engine/datasets/catalog/WWF_HydroSHEDS_03CONDEM?hl=en#description)
+
+First, for comparison with last time we can run this JS code directly in earth engine editor.
+
+```
+var dataset = ee.Image('WWF/HydroSHEDS/03CONDEM');
+var elevation = dataset.select('b1');
+var elevationVis = {
+  min: -50.0,
+  max: 3000.0,
+  gamma: 2.0,
+};
+Map.setCenter(-111.05, 45.667, 11);
+Map.addLayer(elevation, elevationVis, 'Elevation');
+```
+
+---
+
+Here is the `rgee` analog that also extracts data for a 10KM buffer around MSU.
+
+```{r}
+elevation <- ee$Image("WWF/HydroSHEDS/03CONDEM")
+bozeman <- ee$Geometry$Point(-111.05,45.667)$buffer(10000)$bounds()
+
+boz_elev_raster <- ee_as_rast(elevation, bozeman, via = 'drive')
+plot(boz_elev_raster)
+```
+
+Recall, we can even create a data frame with the raster information and use this in tidyverse.
+
+```{r}
+boz_df <- as.data.frame(boz_elev_raster, xy = T)
+boz_df |>
+  mutate(`elevation(m)` = b1) |>
+  ggplot() +
+    geom_raster(aes(x = x, y = y, fill = `elevation(m)`)) +
+    scale_fill_viridis_c() +
+  geom_point(x = -111.05,y = 45.667) +
+  annotate('text', label = 'MSU', x = -111.05,y = 45.672)
+```
+
+---
+
+## Putting it all together
+
+Recall the elk dataset from HW1
+
+#### Step 1: Data Visualization
+
+```{r}
+elk <- read_csv('https://raw.githubusercontent.com/Stat534/data/refs/heads/main/elk.csv')
+```
+
+
+
+#### Step 2: Is this a homogenous PP?
+
+```{r}
+elk_pp <- ppp(y = elk$`location-lat`, x = elk$`location-long`,
+              window = owin(yrange = c(min(elk$`location-lat`), max(elk$`location-lat`)),
+                   xrange = c(min(elk$`location-long`), max(elk$`location-long`))))
+```
+
+
+#### Step 3: Intensity Surface
+
+```{r}
+plot(density(elk_pp))
+```
+
+There is not an obvious parametric intensity function of Lat / long. So let's start with a naive (log) linear specification - which unsurprisingly results in a poor fit.
+
+```{r}
+naive_ppm <- ppm(elk_pp ~ x + y)
+plot(naive_ppm)
+```
+
+
+#### Step 4: Geospatial Covariates
+
+There is likely more to the story, so let's pull elevation from GEE, but we need to make sure the bounding box matches our ppm. See this for [bounding box help](https://developers.google.com/earth-engine/apidocs/ee-geometry-bbox-bounds#colab-python).
+
+```{r}
+elk_box <- ee$Geometry$BBox(min(elk$`location-long`),
+                            min(elk$`location-lat`),
+                            max(elk$`location-long`),
+                            max(elk$`location-lat`))
+
+```
+
+
+You might need this function to convert the SpatRaster to an im object
+
+```{r}
+#https://stackoverflow.com/questions/77912041/convert-raster-terra-to-im-object-spatstat
+as.im.SpatRaster1 <- function(X) {
+    X <- X[[1]]
+    rs <- terra::res(X)
+    e <- as.vector(terra::ext(X))
+    out <- list(
+        v = as.matrix(X, wide=TRUE)[nrow(X):1, ],
+        dim = dim(X)[1:2],
+        xrange = e[1:2],
+        yrange = e[3:4],
+        xstep = rs[1],
+        ystep = rs[2],
+        xcol = e[1] + (1:ncol(X)) * rs[1] + 0.5 * rs[1],
+        yrow = e[4] - (nrow(X):1) * rs[2] + 0.5 * rs[2],
+        type = "real",
+        units  = list(singular=units(X), plural=units(X), multiplier=1)
+    )
+    attr(out$units, "class") <- "unitname"
+    attr(out, "class") <- "im"
+    out
+}
+
+
+```
+
+
+#### Step 5: Diagnostics & Model Choice
+
+As with general statistical modeling frameworks, we can visualize model fit & residuals (`diagnose.ppm`). These models also have a built in likelihood, so you can also use `AIC`
